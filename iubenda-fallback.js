@@ -1,20 +1,43 @@
-/* Iubenda Fallback
- * Waits until Iubenda finishes processing all iframes.
- * Iubenda handles blocking and consent management.
+/* Iubenda Fallback v14
+ * Displays fallbacks only after all iframe changes have settled.
+ * Iubenda remains responsible for blocking and consent management.
  */
 
 (function () {
   "use strict";
 
   var FALLBACK_CLASS = "iub-fallback-wrapper";
-  var PROCESSED_CLASS = "iub-processed";
+  var READY_CLASS = "iub-fallback-ready";
   var ACTIVATED_CLASS = "_iub_cs_activate-activated";
-
-  // Wait after the last iframe change.
   var SETTLE_DELAY = 1000;
 
   var settleTimer = null;
   var fallbackReady = false;
+
+  /*
+   * Hide every fallback by default.
+   * This style is injected immediately when this file executes.
+   */
+  function injectVisibilityGuard() {
+    if (document.getElementById("iub-fallback-visibility-guard")) {
+      return;
+    }
+
+    var style = document.createElement("style");
+    style.id = "iub-fallback-visibility-guard";
+    style.textContent =
+      "html:not(." +
+      READY_CLASS +
+      ") ." +
+      FALLBACK_CLASS +
+      "{display:none!important;}";
+
+    (document.head || document.documentElement).appendChild(style);
+
+    document.documentElement.classList.remove(READY_CLASS);
+  }
+
+  injectVisibilityGuard();
 
   var PADLOCK_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
@@ -156,8 +179,6 @@
     }
 
     parent.insertBefore(buildFallback(), iframe.nextSibling);
-
-    iframe.classList.add(PROCESSED_CLASS);
   }
 
   function removeFallback(iframe) {
@@ -166,8 +187,6 @@
     if (fallback) {
       fallback.remove();
     }
-
-    iframe.classList.remove(PROCESSED_CLASS);
   }
 
   function synchronizeAllIframes() {
@@ -191,16 +210,18 @@
 
         if (!iframe || !isBlocked(iframe)) {
           fallback.remove();
-
-          if (iframe) {
-            iframe.classList.remove(PROCESSED_CLASS);
-          }
         }
       });
   }
 
   function scheduleFinalCheck() {
     fallbackReady = false;
+
+    /*
+     * Immediately hide existing fallbacks while Iubenda
+     * is changing iframe states.
+     */
+    document.documentElement.classList.remove(READY_CLASS);
 
     if (settleTimer) {
       window.clearTimeout(settleTimer);
@@ -209,7 +230,16 @@
     settleTimer = window.setTimeout(function () {
       settleTimer = null;
       fallbackReady = true;
+
+      /*
+       * Create/remove fallbacks while they are still hidden.
+       */
       synchronizeAllIframes();
+
+      /*
+       * Reveal only the fallbacks that are still required.
+       */
+      document.documentElement.classList.add(READY_CLASS);
     }, SETTLE_DELAY);
   }
 
@@ -218,10 +248,11 @@
       return false;
     }
 
-    return (
-      node.tagName === "IFRAME" ||
-      Boolean(node.querySelector && node.querySelector("iframe"))
-    );
+    if (node.tagName === "IFRAME") {
+      return true;
+    }
+
+    return Boolean(node.querySelector && node.querySelector("iframe"));
   }
 
   function isRelevantMutation(mutation) {
@@ -236,14 +267,16 @@
       return false;
     }
 
-    for (var i = 0; i < mutation.addedNodes.length; i++) {
+    var i;
+
+    for (i = 0; i < mutation.addedNodes.length; i++) {
       if (containsIframe(mutation.addedNodes[i])) {
         return true;
       }
     }
 
-    for (var j = 0; j < mutation.removedNodes.length; j++) {
-      if (containsIframe(mutation.removedNodes[j])) {
+    for (i = 0; i < mutation.removedNodes.length; i++) {
+      if (containsIframe(mutation.removedNodes[i])) {
         return true;
       }
     }
@@ -251,27 +284,28 @@
     return false;
   }
 
+  function removeActivatedFallbacks(mutations) {
+    mutations.forEach(function (mutation) {
+      if (
+        mutation.type === "attributes" &&
+        mutation.target.tagName === "IFRAME" &&
+        !isBlocked(mutation.target)
+      ) {
+        removeFallback(mutation.target);
+      }
+    });
+  }
+
   function init() {
     if (window.MutationObserver && document.body) {
       var observer = new MutationObserver(function (mutations) {
-        var relevantMutation = mutations.some(isRelevantMutation);
+        var relevant = mutations.some(isRelevantMutation);
 
-        if (!relevantMutation) {
+        if (!relevant) {
           return;
         }
 
-        // Remove a fallback immediately if its iframe
-        // has already been activated.
-        mutations.forEach(function (mutation) {
-          if (
-            mutation.type === "attributes" &&
-            mutation.target.tagName === "IFRAME" &&
-            !isBlocked(mutation.target)
-          ) {
-            removeFallback(mutation.target);
-          }
-        });
-
+        removeActivatedFallbacks(mutations);
         scheduleFinalCheck();
       });
 
@@ -289,7 +323,6 @@
       });
     }
 
-    // Initial check begins after the entire page is loaded.
     function startInitialCheck() {
       scheduleFinalCheck();
     }
