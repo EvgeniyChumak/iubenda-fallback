@@ -1,4 +1,4 @@
-/* Iubenda Fallback v18 */
+/* Iubenda Fallback v19 */
 
 (function () {
   "use strict";
@@ -122,36 +122,66 @@
     return parent.querySelector(":scope > ." + FALLBACK_CLASS);
   }
 
-  function updateFallbackSize(wrapper) {
+  function getCurrentSizeClass(wrapper) {
+    for (var i = 0; i < SIZE_CLASSES.length; i++) {
+      if (wrapper.classList.contains(SIZE_CLASSES[i])) {
+        return SIZE_CLASSES[i];
+      }
+    }
+
+    return "";
+  }
+
+  function getRequiredSizeClass(wrapper) {
     var width = wrapper.clientWidth;
     var height = wrapper.clientHeight;
+
+    if (height <= 80) {
+      return "is-extremely-short";
+    }
+
+    if (width <= 220 || height <= 130) {
+      return "is-very-small";
+    }
+
+    if (width <= 300 || height <= 210) {
+      return "is-small";
+    }
+
+    if (width <= 420 || height <= 280) {
+      return "is-medium";
+    }
+
+    return "";
+  }
+
+  function updateFallbackSize(wrapper) {
+    if (!wrapper || !wrapper.isConnected) {
+      return;
+    }
+
+    var currentClass = getCurrentSizeClass(wrapper);
+    var requiredClass = getRequiredSizeClass(wrapper);
+
+    /*
+     * Do not change the DOM when the correct responsive
+     * class has already been applied.
+     */
+    if (currentClass === requiredClass) {
+      return;
+    }
 
     SIZE_CLASSES.forEach(function (className) {
       wrapper.classList.remove(className);
     });
 
-    if (height <= 80) {
-      wrapper.classList.add("is-extremely-short");
-      return;
-    }
-
-    if (width <= 220 || height <= 130) {
-      wrapper.classList.add("is-very-small");
-      return;
-    }
-
-    if (width <= 300 || height <= 210) {
-      wrapper.classList.add("is-small");
-      return;
-    }
-
-    if (width <= 420 || height <= 280) {
-      wrapper.classList.add("is-medium");
+    if (requiredClass) {
+      wrapper.classList.add(requiredClass);
     }
   }
 
   var resizeObserver =
-    typeof ResizeObserver === "function"
+    typeof window.ResizeObserver === "function"
       ? new ResizeObserver(function (entries) {
           entries.forEach(function (entry) {
             updateFallbackSize(entry.target);
@@ -202,6 +232,10 @@
   }
 
   function updateIframe(iframe) {
+    if (!iframe || iframe.tagName !== "IFRAME") {
+      return;
+    }
+
     var fallback = getFallback(iframe);
 
     var shouldShow = isBlockedByIubenda(iframe) && isConsentDenied(iframe);
@@ -238,7 +272,45 @@
   }
 
   function updateAll() {
-    document.querySelectorAll("iframe").forEach(updateIframe);
+    document.querySelectorAll("iframe").forEach(function (iframe) {
+      updateIframe(iframe);
+    });
+  }
+
+  function processAddedNode(node) {
+    if (!node || node.nodeType !== 1) {
+      return;
+    }
+
+    if (node.tagName === "IFRAME") {
+      updateIframe(node);
+    }
+
+    if (typeof node.querySelectorAll === "function") {
+      node.querySelectorAll("iframe").forEach(function (iframe) {
+        updateIframe(iframe);
+      });
+    }
+  }
+
+  function processMutations(mutations) {
+    mutations.forEach(function (mutation) {
+      /*
+       * Attribute changes are processed only when the changed
+       * element is an iframe. Fallback class changes are ignored.
+       */
+      if (mutation.type === "attributes") {
+        if (mutation.target.tagName === "IFRAME") {
+          updateIframe(mutation.target);
+        }
+
+        return;
+      }
+
+      if (mutation.type === "childList") {
+        mutation.addedNodes.forEach(processAddedNode);
+      }
+    });
   }
 
   function init() {
@@ -246,26 +318,35 @@
       return;
     }
 
-    var observer = new MutationObserver(updateAll);
-
-    observer.observe(document.body, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: [
-        "src",
-        "class",
-        "data-suppressedsrc",
-        "suppressedsrc",
-        "data-iub-purposes",
-      ],
-    });
-
     updateAll();
 
-    window.setInterval(updateAll, 500);
+    if (typeof window.MutationObserver === "function") {
+      var observer = new MutationObserver(processMutations);
 
-    window.addEventListener("resize", updateAll);
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: [
+          "src",
+          "class",
+          "data-suppressedsrc",
+          "suppressedsrc",
+          "data-iub-purposes",
+        ],
+      });
+    }
+
+    /*
+     * Used only as a fallback for browsers without ResizeObserver.
+     */
+    if (!resizeObserver) {
+      window.addEventListener("resize", function () {
+        document
+          .querySelectorAll("." + FALLBACK_CLASS)
+          .forEach(updateFallbackSize);
+      });
+    }
   }
 
   if (document.readyState === "loading") {
