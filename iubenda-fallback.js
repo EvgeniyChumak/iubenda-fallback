@@ -1,5 +1,5 @@
 /* Iubenda Fallback
- * Shows a fallback only for iframe elements that remain blocked.
+ * Waits until Iubenda finishes processing all iframes.
  * Iubenda handles blocking and consent management.
  */
 
@@ -10,11 +10,11 @@
   var PROCESSED_CLASS = "iub-processed";
   var ACTIVATED_CLASS = "_iub_cs_activate-activated";
 
-  // Fallback is enabled only after the page has fully loaded.
-  var BLOCKED_STATE_DELAY = 300;
-  var fallbackEnabled = false;
+  // Wait after the last iframe change.
+  var SETTLE_DELAY = 1000;
 
-  var iframeTimers = new WeakMap();
+  var settleTimer = null;
+  var fallbackReady = false;
 
   var PADLOCK_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
@@ -140,7 +140,7 @@
 
   function showFallback(iframe) {
     if (
-      !fallbackEnabled ||
+      !fallbackReady ||
       !iframe.isConnected ||
       !iframe.parentElement ||
       !isBlocked(iframe) ||
@@ -161,8 +161,6 @@
   }
 
   function removeFallback(iframe) {
-    clearIframeTimer(iframe);
-
     var fallback = getFallback(iframe);
 
     if (fallback) {
@@ -172,61 +170,19 @@
     iframe.classList.remove(PROCESSED_CLASS);
   }
 
-  function clearIframeTimer(iframe) {
-    var timer = iframeTimers.get(iframe);
-
-    if (timer) {
-      window.clearTimeout(timer);
-      iframeTimers.delete(iframe);
-    }
-  }
-
-  function scheduleFallback(iframe) {
-    clearIframeTimer(iframe);
-
-    if (!fallbackEnabled) {
-      return;
-    }
-
-    if (!isBlocked(iframe)) {
-      removeFallback(iframe);
-      return;
-    }
-
-    if (getFallback(iframe)) {
-      return;
-    }
-
-    var timer = window.setTimeout(function () {
-      iframeTimers.delete(iframe);
-
+  function synchronizeAllIframes() {
+    document.querySelectorAll("iframe").forEach(function (iframe) {
       if (isBlocked(iframe)) {
         showFallback(iframe);
       } else {
         removeFallback(iframe);
       }
-    }, BLOCKED_STATE_DELAY);
-
-    iframeTimers.set(iframe, timer);
-  }
-
-  function synchronizeIframe(iframe) {
-    if (!iframe || iframe.tagName !== "IFRAME") {
-      return;
-    }
-
-    if (isBlocked(iframe)) {
-      scheduleFallback(iframe);
-    } else {
-      removeFallback(iframe);
-    }
-  }
-
-  function synchronizeAllIframes() {
-    document.querySelectorAll("iframe").forEach(function (iframe) {
-      synchronizeIframe(iframe);
     });
 
+    removeOrphanedFallbacks();
+  }
+
+  function removeOrphanedFallbacks() {
     document
       .querySelectorAll("." + FALLBACK_CLASS)
       .forEach(function (fallback) {
@@ -243,40 +199,80 @@
       });
   }
 
-  function processMutation(mutation) {
+  function scheduleFinalCheck() {
+    fallbackReady = false;
+
+    if (settleTimer) {
+      window.clearTimeout(settleTimer);
+    }
+
+    settleTimer = window.setTimeout(function () {
+      settleTimer = null;
+      fallbackReady = true;
+      synchronizeAllIframes();
+    }, SETTLE_DELAY);
+  }
+
+  function containsIframe(node) {
+    if (!node || node.nodeType !== 1) {
+      return false;
+    }
+
+    return (
+      node.tagName === "IFRAME" ||
+      Boolean(node.querySelector && node.querySelector("iframe"))
+    );
+  }
+
+  function isRelevantMutation(mutation) {
     if (
       mutation.type === "attributes" &&
       mutation.target.tagName === "IFRAME"
     ) {
-      synchronizeIframe(mutation.target);
-      return;
+      return true;
     }
 
     if (mutation.type !== "childList") {
-      return;
+      return false;
     }
 
-    mutation.addedNodes.forEach(function (node) {
-      if (node.nodeType !== 1) {
-        return;
+    for (var i = 0; i < mutation.addedNodes.length; i++) {
+      if (containsIframe(mutation.addedNodes[i])) {
+        return true;
       }
+    }
 
-      if (node.tagName === "IFRAME") {
-        synchronizeIframe(node);
+    for (var j = 0; j < mutation.removedNodes.length; j++) {
+      if (containsIframe(mutation.removedNodes[j])) {
+        return true;
       }
+    }
 
-      if (node.querySelectorAll) {
-        node.querySelectorAll("iframe").forEach(function (iframe) {
-          synchronizeIframe(iframe);
-        });
-      }
-    });
+    return false;
   }
 
   function init() {
     if (window.MutationObserver && document.body) {
       var observer = new MutationObserver(function (mutations) {
-        mutations.forEach(processMutation);
+        var relevantMutation = mutations.some(isRelevantMutation);
+
+        if (!relevantMutation) {
+          return;
+        }
+
+        // Remove a fallback immediately if its iframe
+        // has already been activated.
+        mutations.forEach(function (mutation) {
+          if (
+            mutation.type === "attributes" &&
+            mutation.target.tagName === "IFRAME" &&
+            !isBlocked(mutation.target)
+          ) {
+            removeFallback(mutation.target);
+          }
+        });
+
+        scheduleFinalCheck();
       });
 
       observer.observe(document.body, {
@@ -293,17 +289,15 @@
       });
     }
 
-    function enableFallback() {
-      window.setTimeout(function () {
-        fallbackEnabled = true;
-        synchronizeAllIframes();
-      }, 300);
+    // Initial check begins after the entire page is loaded.
+    function startInitialCheck() {
+      scheduleFinalCheck();
     }
 
     if (document.readyState === "complete") {
-      enableFallback();
+      startInitialCheck();
     } else {
-      window.addEventListener("load", enableFallback, { once: true });
+      window.addEventListener("load", startInitialCheck, { once: true });
     }
   }
 
