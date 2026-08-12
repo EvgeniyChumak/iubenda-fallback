@@ -1,22 +1,31 @@
-/* Iubenda Fallback v17 */
+/* Iubenda Fallback v18 */
 
 (function () {
   "use strict";
 
   var FALLBACK_CLASS = "iub-fallback-wrapper";
 
+  var SIZE_CLASSES = [
+    "is-medium",
+    "is-small",
+    "is-very-small",
+    "is-extremely-short",
+  ];
+
   var PADLOCK_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
     'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
-    'aria-hidden="true">' +
+    'aria-hidden="true" focusable="false">' +
     '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>' +
     '<path d="M7 11V7a5 5 0 0 1 9.9-1"></path>' +
     "</svg>";
 
   function getApi() {
-    return window._iub && window._iub.cs && window._iub.cs.api
-      ? window._iub.cs.api
-      : null;
+    if (window._iub && window._iub.cs && window._iub.cs.api) {
+      return window._iub.cs.api;
+    }
+
+    return null;
   }
 
   function openPreferences() {
@@ -31,7 +40,10 @@
 
     if (link) {
       link.click();
+      return;
     }
+
+    console.warn("[Iubenda Fallback] Preferences API is not available.");
   }
 
   function isBlockedByIubenda(iframe) {
@@ -110,6 +122,43 @@
     return parent.querySelector(":scope > ." + FALLBACK_CLASS);
   }
 
+  function updateFallbackSize(wrapper) {
+    var width = wrapper.clientWidth;
+    var height = wrapper.clientHeight;
+
+    SIZE_CLASSES.forEach(function (className) {
+      wrapper.classList.remove(className);
+    });
+
+    if (height <= 80) {
+      wrapper.classList.add("is-extremely-short");
+      return;
+    }
+
+    if (width <= 220 || height <= 130) {
+      wrapper.classList.add("is-very-small");
+      return;
+    }
+
+    if (width <= 300 || height <= 210) {
+      wrapper.classList.add("is-small");
+      return;
+    }
+
+    if (width <= 420 || height <= 280) {
+      wrapper.classList.add("is-medium");
+    }
+  }
+
+  var resizeObserver =
+    typeof ResizeObserver === "function"
+      ? new ResizeObserver(function (entries) {
+          entries.forEach(function (entry) {
+            updateFallbackSize(entry.target);
+          });
+        })
+      : null;
+
   function createFallback() {
     var wrapper = document.createElement("div");
 
@@ -120,12 +169,10 @@
       PADLOCK_SVG +
       "</div>" +
       '<div class="iub-fallback-title">' +
-      "Wir benötigen Ihre Zustimmung, um diesen Inhalt zu laden" +
+      "Video durch Cookie-Einstellungen blockiert" +
       "</div>" +
       '<div class="iub-fallback-text">' +
-      "Um auf die eingebetteten Inhalte zugreifen zu können, " +
-      "müssen Sie dem Dienst des Drittanbieters zustimmen, " +
-      "da dieser Daten über Ihre Aktivitäten sammeln kann." +
+      "Bitte erlauben Sie externe Medien, um dieses Video anzusehen." +
       "</div>" +
       '<button type="button" class="iub-fallback-button">' +
       "Cookie-Einstellungen öffnen" +
@@ -142,20 +189,34 @@
     return wrapper;
   }
 
+  function removeFallback(fallback) {
+    if (!fallback) {
+      return;
+    }
+
+    if (resizeObserver) {
+      resizeObserver.unobserve(fallback);
+    }
+
+    fallback.remove();
+  }
+
   function updateIframe(iframe) {
     var fallback = getFallback(iframe);
 
     var shouldShow = isBlockedByIubenda(iframe) && isConsentDenied(iframe);
 
     if (!shouldShow) {
-      if (fallback) {
-        fallback.remove();
-      }
-
+      removeFallback(fallback);
       return;
     }
 
-    if (fallback || !iframe.parentElement) {
+    if (fallback) {
+      updateFallbackSize(fallback);
+      return;
+    }
+
+    if (!iframe.parentElement) {
       return;
     }
 
@@ -165,7 +226,15 @@
       parent.style.position = "relative";
     }
 
-    parent.insertBefore(createFallback(), iframe.nextSibling);
+    fallback = createFallback();
+
+    parent.insertBefore(fallback, iframe.nextSibling);
+
+    updateFallbackSize(fallback);
+
+    if (resizeObserver) {
+      resizeObserver.observe(fallback);
+    }
   }
 
   function updateAll() {
@@ -173,6 +242,10 @@
   }
 
   function init() {
+    if (!document.body) {
+      return;
+    }
+
     var observer = new MutationObserver(updateAll);
 
     observer.observe(document.body, {
@@ -189,7 +262,10 @@
     });
 
     updateAll();
+
     window.setInterval(updateAll, 500);
+
+    window.addEventListener("resize", updateAll);
   }
 
   if (document.readyState === "loading") {
