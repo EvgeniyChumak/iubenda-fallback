@@ -1,13 +1,9 @@
-/* Iubenda Fallback v16 */
+/* Iubenda Fallback v17 */
 
 (function () {
   "use strict";
 
   var FALLBACK_CLASS = "iub-fallback-wrapper";
-  var preferencesReady = false;
-  var preferences = {};
-  var preferenceExpressed = false;
-  var lastPreferenceState = "";
 
   var PADLOCK_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
@@ -18,7 +14,9 @@
     "</svg>";
 
   function getApi() {
-    return (window._iub && window._iub.cs && window._iub.cs.api) || null;
+    return window._iub && window._iub.cs && window._iub.cs.api
+      ? window._iub.cs.api
+      : null;
   }
 
   function openPreferences() {
@@ -33,66 +31,26 @@
 
     if (link) {
       link.click();
-      return;
-    }
-
-    console.warn("[Iubenda Fallback] Preferences API unavailable.");
-  }
-
-  function readPreferences() {
-    var api = getApi();
-
-    if (!api || typeof api.getPreferences !== "function") {
-      return false;
-    }
-
-    try {
-      preferences = api.getPreferences() || {};
-
-      preferenceExpressed =
-        typeof api.isPreferenceExpressed === "function"
-          ? api.isPreferenceExpressed() === true
-          : Object.keys(preferences).length > 0;
-
-      preferencesReady = true;
-
-      var state = JSON.stringify({
-        expressed: preferenceExpressed,
-        preferences: preferences,
-      });
-
-      if (state !== lastPreferenceState) {
-        lastPreferenceState = state;
-        updateAll();
-      }
-
-      return true;
-    } catch (error) {
-      return false;
     }
   }
 
-  function isBlocked(iframe) {
-    if (iframe.classList.contains("_iub_cs_activate-activated")) {
-      return false;
-    }
-
-    if (
+  function isBlockedByIubenda(iframe) {
+    return (
       iframe.hasAttribute("data-suppressedsrc") ||
       iframe.hasAttribute("suppressedsrc")
-    ) {
-      return true;
-    }
-
-    var src = iframe.getAttribute("src") || "";
-
-    return (
-      iframe.classList.contains("_iub_cs_activate") &&
-      (!src || src.indexOf("about:blank") !== -1)
     );
   }
 
-  function getPurposeValue(purpose) {
+  function getRequiredPurposes(iframe) {
+    return (iframe.getAttribute("data-iub-purposes") || "")
+      .split(",")
+      .map(function (purpose) {
+        return purpose.trim();
+      })
+      .filter(Boolean);
+  }
+
+  function getPreference(preferences, purpose) {
     if (
       preferences.purposes &&
       typeof preferences.purposes[purpose] === "boolean"
@@ -107,44 +65,37 @@
     return null;
   }
 
-  function hasConsent(iframe) {
-    if (!preferencesReady || !preferenceExpressed) {
+  function isConsentDenied(iframe) {
+    var api = getApi();
+
+    if (
+      !api ||
+      typeof api.getPreferences !== "function" ||
+      typeof api.isPreferenceExpressed !== "function" ||
+      api.isPreferenceExpressed() !== true
+    ) {
       return false;
     }
 
-    var purposes = (iframe.getAttribute("data-iub-purposes") || "")
-      .split(",")
-      .map(function (purpose) {
-        return purpose.trim();
-      })
-      .filter(Boolean);
+    var preferences = api.getPreferences() || {};
+    var purposes = getRequiredPurposes(iframe);
 
-    var applicableValues = purposes
-      .map(getPurposeValue)
+    if (!purposes.length) {
+      return false;
+    }
+
+    var knownValues = purposes
+      .map(function (purpose) {
+        return getPreference(preferences, purpose);
+      })
       .filter(function (value) {
         return typeof value === "boolean";
       });
 
-    if (applicableValues.length) {
-      return applicableValues.every(function (value) {
-        return value === true;
-      });
-    }
-
-    if (typeof preferences.consent === "boolean") {
-      return preferences.consent;
-    }
-
-    var generalValues = Object.keys(preferences.purposes || {}).map(
-      function (purpose) {
-        return preferences.purposes[purpose];
-      },
-    );
-
     return (
-      generalValues.length > 0 &&
-      generalValues.every(function (value) {
-        return value === true;
+      knownValues.length > 0 &&
+      knownValues.some(function (value) {
+        return value === false;
       })
     );
   }
@@ -156,19 +107,12 @@
       return null;
     }
 
-    var children = parent.children;
-
-    for (var i = 0; i < children.length; i++) {
-      if (children[i].classList.contains(FALLBACK_CLASS)) {
-        return children[i];
-      }
-    }
-
-    return null;
+    return parent.querySelector(":scope > ." + FALLBACK_CLASS);
   }
 
   function createFallback() {
     var wrapper = document.createElement("div");
+
     wrapper.className = FALLBACK_CLASS;
 
     wrapper.innerHTML =
@@ -201,20 +145,7 @@
   function updateIframe(iframe) {
     var fallback = getFallback(iframe);
 
-    /*
-     * Critical rule:
-     * show absolutely nothing until Iubenda preferences
-     * are available.
-     */
-    if (!preferencesReady) {
-      if (fallback) {
-        fallback.remove();
-      }
-
-      return;
-    }
-
-    var shouldShow = isBlocked(iframe) && !hasConsent(iframe);
+    var shouldShow = isBlockedByIubenda(iframe) && isConsentDenied(iframe);
 
     if (!shouldShow) {
       if (fallback) {
@@ -230,7 +161,7 @@
 
     var parent = iframe.parentElement;
 
-    if (getComputedStyle(parent).position === "static") {
+    if (window.getComputedStyle(parent).position === "static") {
       parent.style.position = "relative";
     }
 
@@ -242,18 +173,7 @@
   }
 
   function init() {
-    /*
-     * Remove fallbacks created by an older cached version.
-     */
-    document
-      .querySelectorAll("." + FALLBACK_CLASS)
-      .forEach(function (fallback) {
-        fallback.remove();
-      });
-
-    var observer = new MutationObserver(function () {
-      updateAll();
-    });
+    var observer = new MutationObserver(updateAll);
 
     observer.observe(document.body, {
       subtree: true,
@@ -268,20 +188,8 @@
       ],
     });
 
-    /*
-     * Wait for Iubenda. Until it is available,
-     * no fallback is created.
-     */
-    var apiTimer = window.setInterval(function () {
-      if (readPreferences()) {
-        window.clearInterval(apiTimer);
-      }
-    }, 100);
-
-    /*
-     * Detect later changes made in the preferences panel.
-     */
-    window.setInterval(readPreferences, 500);
+    updateAll();
+    window.setInterval(updateAll, 500);
   }
 
   if (document.readyState === "loading") {
