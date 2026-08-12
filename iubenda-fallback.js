@@ -1,4 +1,4 @@
-/* Iubenda Fallback v11
+/* Iubenda Fallback
  * Shows a fallback only for iframe elements that remain blocked.
  * Iubenda handles blocking and consent management.
  */
@@ -10,8 +10,9 @@
   var PROCESSED_CLASS = "iub-processed";
   var ACTIVATED_CLASS = "_iub_cs_activate-activated";
 
-  // How long the iframe must remain blocked without changing.
-  var BLOCKED_STATE_DELAY = 1000;
+  // Fallback is enabled only after the page has fully loaded.
+  var BLOCKED_STATE_DELAY = 300;
+  var fallbackEnabled = false;
 
   var iframeTimers = new WeakMap();
 
@@ -139,6 +140,7 @@
 
   function showFallback(iframe) {
     if (
+      !fallbackEnabled ||
       !iframe.isConnected ||
       !iframe.parentElement ||
       !isBlocked(iframe) ||
@@ -182,12 +184,15 @@
   function scheduleFallback(iframe) {
     clearIframeTimer(iframe);
 
+    if (!fallbackEnabled) {
+      return;
+    }
+
     if (!isBlocked(iframe)) {
       removeFallback(iframe);
       return;
     }
 
-    // Do not restart the delay if the fallback already exists.
     if (getFallback(iframe)) {
       return;
     }
@@ -195,8 +200,6 @@
     var timer = window.setTimeout(function () {
       iframeTimers.delete(iframe);
 
-      // Check again because Iubenda may have activated
-      // the iframe while the timer was running.
       if (isBlocked(iframe)) {
         showFallback(iframe);
       } else {
@@ -271,28 +274,37 @@
   }
 
   function init() {
-    synchronizeAllIframes();
+    if (window.MutationObserver && document.body) {
+      var observer = new MutationObserver(function (mutations) {
+        mutations.forEach(processMutation);
+      });
 
-    if (!window.MutationObserver || !document.body) {
-      return;
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: [
+          "src",
+          "class",
+          "data-suppressedsrc",
+          "suppressedsrc",
+          "data-ready",
+        ],
+      });
     }
 
-    var observer = new MutationObserver(function (mutations) {
-      mutations.forEach(processMutation);
-    });
+    function enableFallback() {
+      window.setTimeout(function () {
+        fallbackEnabled = true;
+        synchronizeAllIframes();
+      }, 300);
+    }
 
-    observer.observe(document.body, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: [
-        "src",
-        "class",
-        "data-suppressedsrc",
-        "suppressedsrc",
-        "data-ready",
-      ],
-    });
+    if (document.readyState === "complete") {
+      enableFallback();
+    } else {
+      window.addEventListener("load", enableFallback, { once: true });
+    }
   }
 
   if (document.readyState === "loading") {
